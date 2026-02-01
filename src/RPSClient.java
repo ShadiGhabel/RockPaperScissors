@@ -22,7 +22,20 @@ public class RPSClient {
             clientService.connect(SERVER_IP, SERVER_PORT);
 
             System.out.println("Welcome to Rock Paper Scissors!");
-            clientService.sendMessage("JOIN");
+            System.out.println("mode:");
+            System.out.println("1. Play with another player");
+            System.out.println("2. Play with Bot");
+            System.out.print("Enter your choice: ");
+
+            String mode = scanner.nextLine().trim();
+
+            if (mode.equals("2")) {
+                clientService.sendMessage("JOIN_BOT");
+                System.out.println("Joining game with Bot...");
+            } else {
+                clientService.sendMessage("JOIN");
+                System.out.println("Joining game...");
+            }
 
             Thread receiveThread = new Thread(() -> receiveMessages());
             receiveThread.start();
@@ -110,4 +123,3 @@ public class RPSClient {
         System.out.println("Goodbye!");
     }
 }
-

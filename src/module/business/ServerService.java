@@ -3,6 +3,7 @@ package module.business;
 import core.DIContainer;
 import module.abstraction.IGameService;
 import module.abstraction.IServerService;
+import model.BotPlayer;
 import model.GameResult;
 import model.Move;
 import model.Player;
@@ -15,6 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class ServerService implements IServerService {
     private static final int SERVER_PORT = 9001;
+    private static final int ROUND_TIMEOUT = 30; // 30 seconds timeout
     private DatagramSocket socket;
     private boolean running;
     private Map<String, Player> players;
@@ -68,11 +70,30 @@ public class ServerService implements IServerService {
     private void handleClientMessage(String message, InetAddress address, int port) {
         String playerId = address.getHostAddress() + ":" + port;
 
-        if (message.startsWith("JOIN")) {
+        if (message.startsWith("JOIN_BOT")) {
+            handleBotJoinRequest(address, port, playerId);
+        }
+        else if (message.startsWith("JOIN")) {
             handleJoinRequest(address, port, playerId);
-        } else if (message.startsWith("MOVE:")) {
+        }
+        else if (message.startsWith("MOVE:")) {
             handleMoveRequest(message, playerId);
         }
+    }
+
+    private void handleBotJoinRequest(InetAddress address, int port, String playerId) {
+        Player player = new Player(playerId, address, port);
+        players.put(playerId, player);
+
+        System.out.println("Player connected (Bot mode): " + playerId);
+
+        BotPlayer bot = new BotPlayer();
+        players.put(bot.getId(), bot);
+
+        System.out.println("Bot created for player: " + playerId);
+
+        sendToClient("GAME_START:Game started! You are playing against Bot.", address, port);
+        startGame(player, bot);
     }
 
     private void handleJoinRequest(InetAddress address, int port, String playerId) {
@@ -94,21 +115,48 @@ public class ServerService implements IServerService {
     }
 
     private void startGame(Player player1, Player player2) {
+        boolean isBot = player2 instanceof BotPlayer;
+
         System.out.println("Game started between " + player1.getId() + " and " + player2.getId());
 
         sendToPlayer(player1, "GAME_START:Game started!");
-        sendToPlayer(player2, "GAME_START:Game started!");
+        if (!isBot) {
+            sendToPlayer(player2, "GAME_START:Game started!");
+        }
 
         new Thread(() -> manageGame(player1, player2)).start();
     }
 
     private void manageGame(Player player1, Player player2) {
+        boolean isBot = player2 instanceof BotPlayer;
+        int roundNumber = 1;
+
         while (!gameService.isGameOver(player1, player2)) {
             try {
-                sendToPlayer(player1, "REQUEST_MOVE:let's play");
-                sendToPlayer(player2, "REQUEST_MOVE:let's play");
+                System.out.println("Round " + roundNumber + " starting...");
 
-                waitForMoves(player1, player2);
+                sendToPlayer(player1, "REQUEST_MOVE:let's play");
+                if (!isBot) {
+                    sendToPlayer(player2, "REQUEST_MOVE:let's play");
+                }
+
+                boolean timeoutOccurred;
+                Player timedOutPlayer = null;
+
+                if (isBot) {
+                    timeoutOccurred = waitForMoveWithBot(player1, (BotPlayer) player2);
+                    if (timeoutOccurred) {
+                        timedOutPlayer = player1;
+                    }
+                } else {
+                    timedOutPlayer = waitForMoves(player1, player2);
+                    timeoutOccurred = (timedOutPlayer != null);
+                }
+
+                if (timeoutOccurred) {
+                    handleTimeout(player1, player2, timedOutPlayer, isBot);
+                    return;
+                }
 
                 GameResult result = gameService.playRound(player1, player2);
 
@@ -120,9 +168,12 @@ public class ServerService implements IServerService {
                 );
 
                 sendToPlayer(player1, resultMessage);
-                sendToPlayer(player2, resultMessage);
+                if (!isBot) {
+                    sendToPlayer(player2, resultMessage);
+                }
 
-                System.out.println("Round played: " + result.getMessage());
+                System.out.println("Round " + roundNumber + " played: " + result.getMessage());
+                roundNumber++;
 
                 Thread.sleep(1000);
 
@@ -134,24 +185,78 @@ public class ServerService implements IServerService {
 
         Player winner = gameService.getWinner(player1, player2);
         sendToPlayer(player1, "GAME_OVER:Game Over! Winner: " +
-                (winner.equals(player1) ? "You" : "Opponent"));
-        sendToPlayer(player2, "GAME_OVER:Game Over! Winner: " +
-                (winner.equals(player2) ? "You" : "Opponent"));
+                (winner.equals(player1) ? "You" : (isBot ? "Bot" : "Opponent")));
+        if (!isBot) {
+            sendToPlayer(player2, "GAME_OVER:Game Over! Winner: " +
+                    (winner.equals(player2) ? "You" : "Opponent"));
+        }
 
         System.out.println("Game finished. Winner: " + winner.getId());
     }
 
-    private void waitForMoves(Player player1, Player player2) throws InterruptedException {
-        player1.setCurrentMove(null);
-        player2.setCurrentMove(null);
+    private void handleTimeout(Player player1, Player player2, Player timedOutPlayer, boolean isBot) {
+        System.out.println("Timeout occurred! Player: " + timedOutPlayer.getId());
 
-        int timeout = 300;
+        Player winner = timedOutPlayer.equals(player1) ? player2 : player1;
+
+        sendToPlayer(timedOutPlayer, "GAME_OVER:Timeout! You lose the game.");
+
+        if (isBot) {
+            System.out.println("Bot wins due to player timeout");
+        } else {
+            sendToPlayer(winner, "GAME_OVER:You win! Opponent timed out.");
+        }
+
+        System.out.println("Game ended due to timeout. Winner: " + winner.getId());
+    }
+
+    private boolean waitForMoveWithBot(Player player, BotPlayer bot) throws InterruptedException {
+        player.setCurrentMove(null);
+
+        int timeoutCounter = ROUND_TIMEOUT * 10;
         int elapsed = 0;
 
-        while ((player1.getCurrentMove() == null || player2.getCurrentMove() == null) && elapsed < timeout) {
+        while (player.getCurrentMove() == null && elapsed < timeoutCounter) {
             Thread.sleep(100);
             elapsed++;
         }
+
+        if (player.getCurrentMove() == null) {
+            System.out.println("Player " + player.getId() + " timed out!");
+            return true;
+        }
+
+        Move botMove = bot.makeRandomMove();
+        System.out.println("Bot chose: " + botMove.getName());
+
+        return false;
+    }
+
+    private Player waitForMoves(Player player1, Player player2) throws InterruptedException {
+        player1.setCurrentMove(null);
+        player2.setCurrentMove(null);
+
+        int timeoutCounter = ROUND_TIMEOUT * 10;
+        int elapsed = 0;
+
+        while ((player1.getCurrentMove() == null || player2.getCurrentMove() == null) && elapsed < timeoutCounter) {
+            Thread.sleep(100);
+            elapsed++;
+        }
+
+        if (player1.getCurrentMove() == null && player2.getCurrentMove() == null) {
+            System.out.println("Both players timed out! Player 1 loses.");
+            return player1;
+        }
+        else if (player1.getCurrentMove() == null) {
+            System.out.println("Player " + player1.getId() + " timed out!");
+            return player1;
+        }
+        else if (player2.getCurrentMove() == null) {
+            System.out.println("Player " + player2.getId() + " timed out!");
+            return player2;
+        }
+        return null;
     }
 
     private void handleMoveRequest(String message, String playerId) {
@@ -179,6 +284,9 @@ public class ServerService implements IServerService {
     }
 
     private void sendToPlayer(Player player, String message) {
+        if (player instanceof BotPlayer) {
+            return;
+        }
         sendToClient(message, player.getAddress(), player.getPort());
     }
 
@@ -201,4 +309,3 @@ public class ServerService implements IServerService {
         System.out.println("Server stopped");
     }
 }
-
