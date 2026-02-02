@@ -20,7 +20,7 @@ public class BotPlayer extends Player {
     }
 
     public Move makeRandomMove() {
-        int choice = random.nextInt(3) + 1; // Random number between 1-3
+        int choice = random.nextInt(3) + 1;
         Move move = Move.fromInt(choice);
         this.setCurrentMove(move);
         return move;

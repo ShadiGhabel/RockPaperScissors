@@ -16,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class ServerService implements IServerService {
     private static final int SERVER_PORT = 9001;
-    private static final int ROUND_TIMEOUT = 30; // 30 seconds timeout
+    private static final int ROUND_TIMEOUT = 30;
     private DatagramSocket socket;
     private boolean running;
     private Map<String, Player> players;
@@ -84,24 +84,18 @@ public class ServerService implements IServerService {
     private void handleBotJoinRequest(InetAddress address, int port, String playerId) {
         Player player = new Player(playerId, address, port);
         players.put(playerId, player);
-
         System.out.println("Player connected (Bot mode): " + playerId);
-
         BotPlayer bot = new BotPlayer();
         players.put(bot.getId(), bot);
 
         System.out.println("Bot created for player: " + playerId);
-
-        sendToClient("GAME_START:Game started! You are playing against Bot.", address, port);
         startGame(player, bot);
     }
 
     private void handleJoinRequest(InetAddress address, int port, String playerId) {
         Player player = new Player(playerId, address, port);
         players.put(playerId, player);
-
         System.out.println("Player connected: " + playerId);
-
         waitingPlayers.add(player);
 
         if (waitingPlayers.size() >= 2) {
@@ -109,7 +103,8 @@ public class ServerService implements IServerService {
             Player player2 = waitingPlayers.remove(0);
 
             startGame(player1, player2);
-        } else {
+        }
+        else {
             sendToClient("WAITING:Waiting for another player...", address, port);
         }
     }
@@ -271,7 +266,8 @@ public class ServerService implements IServerService {
                 if (gameService.isValidMove(move)) {
                     player.setCurrentMove(move);
                     System.out.println("Player " + playerId + " chose: " + move.getName());
-                } else {
+                }
+                else {
                     sendToPlayer(player, "INVALID_MOVE:Invalid input! Please enter 1, 2, or 3.");
                 }
             }
